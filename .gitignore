@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.pyo
+*.log
+*.tmp
+backup_before_delete_import_*/
+data/
+文案小程序.py
+.venv/
+venv/
+dist/
+build/
