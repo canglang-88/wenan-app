@@ -10,6 +10,7 @@ import threading
 import tkinter as tk
 import urllib.request
 import zipfile
+import ctypes
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
@@ -19,7 +20,7 @@ COPY_DIR = APP_DIR / "data"
 LEGACY_COPY_DIR = Path(r"D:\桌面\文案")
 INSPIRATION_CATEGORY = "励志文案"
 SINGLE_INSTANCE_PORT = 39271
-APP_VERSION = "v1.5.4"
+APP_VERSION = "v1.5.5"
 GITHUB_OWNER = "canglang-88"
 GITHUB_REPO = "wenan-app"
 UPDATE_API_URL = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
@@ -79,6 +80,30 @@ def acquire_single_instance():
         return sock
     except OSError:
         return None
+
+
+def bring_existing_window_to_front() -> None:
+    user32 = ctypes.windll.user32
+    handles = []
+
+    def callback(hwnd, _lparam):
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        length = user32.GetWindowTextLengthW(hwnd)
+        if length <= 0:
+            return True
+        buffer = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(hwnd, buffer, length + 1)
+        if buffer.value.startswith("文案中枢"):
+            handles.append(hwnd)
+            return False
+        return True
+
+    enum_proc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)(callback)
+    user32.EnumWindows(enum_proc, 0)
+    if handles:
+        user32.ShowWindow(handles[0], 9)
+        user32.SetForegroundWindow(handles[0])
 
 
 def parse_version(version: str) -> tuple[int, ...]:
@@ -1854,6 +1879,7 @@ del "%~f0"
 if __name__ == "__main__":
     instance_lock = acquire_single_instance()
     if instance_lock is None:
+        bring_existing_window_to_front()
         sys.exit(0)
     bootstrap_internal_data()
     app = CopyApp()
