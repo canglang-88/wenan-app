@@ -11,6 +11,11 @@ import tkinter as tk
 import urllib.request
 import zipfile
 import ctypes
+import base64
+import hashlib
+import hmac
+import platform
+import uuid
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
@@ -20,11 +25,14 @@ COPY_DIR = APP_DIR / "data"
 LEGACY_COPY_DIR = Path(r"D:\桌面\文案")
 INSPIRATION_CATEGORY = "励志文案"
 SINGLE_INSTANCE_PORT = 39271
-APP_VERSION = "v1.5.5"
+APP_VERSION = "v1.6.2"
 GITHUB_OWNER = "canglang-88"
 GITHUB_REPO = "wenan-app"
 UPDATE_API_URL = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
 UPDATE_ASSET_NAME = "wenan_app_update.zip"
+LICENSE_SECRET = "wenan-canglang-license-2026-v1"
+LICENSE_DIR = Path.home() / "AppData" / "Roaming" / "WenanApp"
+LICENSE_FILE = LICENSE_DIR / "license.json"
 
 
 COLORS = {
@@ -118,6 +126,146 @@ def is_newer_version(remote: str, current: str) -> bool:
     remote_parts += (0,) * (length - len(remote_parts))
     current_parts += (0,) * (length - len(current_parts))
     return remote_parts > current_parts
+
+
+def get_device_code() -> str:
+    raw = "|".join(
+        [
+            platform.node(),
+            platform.system(),
+            platform.machine(),
+            str(uuid.getnode()),
+        ]
+    )
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest().upper()
+    return "WENAN-" + "-".join([digest[i : i + 4] for i in range(0, 16, 4)])
+
+
+def license_signature(device_code: str, expires: str) -> str:
+    payload = f"{device_code}|{expires}|{LICENSE_SECRET}"
+    digest = hmac.new(LICENSE_SECRET.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest().upper()
+    return digest[:24]
+
+
+def make_license_code(device_code: str, expires: str = "PERMANENT") -> str:
+    device_code = device_code.strip().upper()
+    expires = expires.strip().upper() or "PERMANENT"
+    signature = license_signature(device_code, expires)
+    token = base64.urlsafe_b64encode(f"{expires}|{signature}".encode("utf-8")).decode("ascii").rstrip("=")
+    return "CL-" + "-".join(token[i : i + 5] for i in range(0, len(token), 5))
+
+
+def verify_license_code(device_code: str, code: str) -> tuple[bool, str]:
+    cleaned = code.strip().replace(" ", "").replace("\n", "").replace("\r", "")
+    if cleaned.upper().startswith("CL-"):
+        cleaned = cleaned[3:]
+    normalized = cleaned.replace("-", "")
+    if not normalized:
+        return False, "请输入授权秘钥"
+    try:
+        padding = "=" * (-len(normalized) % 4)
+        decoded = base64.urlsafe_b64decode((normalized + padding).encode("ascii")).decode("utf-8")
+        expires, signature = decoded.split("|", 1)
+    except Exception:
+        return False, "授权秘钥格式不正确"
+    expected = license_signature(device_code.strip().upper(), expires.strip().upper())
+    if not hmac.compare_digest(signature.strip().upper(), expected):
+        return False, "授权秘钥和本机设备码不匹配"
+    if expires.strip().upper() != "PERMANENT":
+        try:
+            from datetime import date
+
+            expire_date = date.fromisoformat(expires.strip())
+            if date.today() > expire_date:
+                return False, "授权秘钥已过期"
+        except ValueError:
+            return False, "授权秘钥有效期格式不正确"
+    return True, expires.strip().upper()
+
+
+def load_license() -> dict:
+    if not LICENSE_FILE.exists():
+        return {}
+    try:
+        return json.loads(read_text(LICENSE_FILE))
+    except Exception:
+        return {}
+
+
+def save_license(device_code: str, code: str, expires: str) -> None:
+    LICENSE_DIR.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "device_code": device_code,
+        "license_code": code.strip(),
+        "expires": expires,
+        "activated_version": APP_VERSION,
+    }
+    write_text(LICENSE_FILE, json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+def is_activated() -> bool:
+    license_data = load_license()
+    device_code = get_device_code()
+    if license_data.get("device_code") != device_code:
+        return False
+    ok, _message = verify_license_code(device_code, license_data.get("license_code", ""))
+    return ok
+
+
+def show_activation_window() -> bool:
+    device_code = get_device_code()
+    root = tk.Tk()
+    root.title("文案中枢激活")
+    root.geometry("560x360")
+    root.resizable(False, False)
+    root.configure(bg=COLORS["panel"])
+    result = {"ok": False}
+
+    tk.Label(root, text="文案中枢激活", bg=COLORS["panel"], fg=COLORS["ink"], font=("Microsoft YaHei", 20, "bold")).pack(anchor="w", padx=26, pady=(24, 6))
+    tk.Label(root, text="首次使用需要绑定本机设备。请把设备码发给管理员获取授权秘钥。", bg=COLORS["panel"], fg=COLORS["muted"], font=("Microsoft YaHei", 10), wraplength=500, justify=tk.LEFT).pack(anchor="w", padx=26, pady=(0, 18))
+
+    tk.Label(root, text="本机设备码", bg=COLORS["panel"], fg=COLORS["cyan"], font=("Microsoft YaHei", 10, "bold")).pack(anchor="w", padx=26)
+    device_var = tk.StringVar(value=device_code)
+    device_entry = tk.Entry(root, textvariable=device_var, bd=0, bg=COLORS["input"], fg=COLORS["ink"], font=("Consolas", 13), readonlybackground=COLORS["input"])
+    device_entry.configure(state="readonly")
+    device_entry.pack(fill=tk.X, padx=26, pady=(6, 12), ipady=10)
+
+    tk.Label(root, text="授权秘钥", bg=COLORS["panel"], fg=COLORS["cyan"], font=("Microsoft YaHei", 10, "bold")).pack(anchor="w", padx=26)
+    code_var = tk.StringVar()
+    code_entry = tk.Entry(root, textvariable=code_var, bd=0, bg=COLORS["input"], fg=COLORS["ink"], insertbackground=COLORS["cyan"], font=("Consolas", 12))
+    code_entry.pack(fill=tk.X, padx=26, pady=(6, 14), ipady=10)
+    code_entry.focus_set()
+
+    status_var = tk.StringVar(value="")
+    tk.Label(root, textvariable=status_var, bg=COLORS["panel"], fg=COLORS["yellow"], font=("Microsoft YaHei", 10)).pack(anchor="w", padx=26)
+
+    buttons = tk.Frame(root, bg=COLORS["panel"])
+    buttons.pack(fill=tk.X, padx=26, pady=(16, 0))
+
+    def copy_device():
+        root.clipboard_clear()
+        root.clipboard_append(device_code)
+        root.update()
+        status_var.set("设备码已复制")
+
+    def activate():
+        ok, message = verify_license_code(device_code, code_var.get())
+        if not ok:
+            status_var.set(message)
+            return
+        save_license(device_code, code_var.get(), message)
+        result["ok"] = True
+        messagebox.showinfo("激活成功", "本机已激活，以后打开不需要再次输入")
+        root.destroy()
+
+    def cancel():
+        root.destroy()
+
+    RoundButton(buttons, "复制设备码", copy_device, COLORS["cyan"], width=130).pack(side=tk.LEFT)
+    RoundButton(buttons, "激活", activate, COLORS["green"], width=110).pack(side=tk.RIGHT)
+    RoundButton(buttons, "退出", cancel, COLORS["panel2"], fg=COLORS["ink"], width=100).pack(side=tk.RIGHT, padx=10)
+    root.mainloop()
+    return result["ok"]
 
 
 def parse_file(path: Path) -> list[dict]:
@@ -1880,6 +2028,8 @@ if __name__ == "__main__":
     instance_lock = acquire_single_instance()
     if instance_lock is None:
         bring_existing_window_to_front()
+        sys.exit(0)
+    if not is_activated() and not show_activation_window():
         sys.exit(0)
     bootstrap_internal_data()
     app = CopyApp()
