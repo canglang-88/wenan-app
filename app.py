@@ -20,12 +20,13 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 
-APP_DIR = Path(__file__).resolve().parent
+APP_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
 COPY_DIR = APP_DIR / "data"
 LEGACY_COPY_DIR = Path(r"D:\桌面\文案")
 INSPIRATION_CATEGORY = "励志文案"
 SINGLE_INSTANCE_PORT = 39271
-APP_VERSION = "v1.6.4"
+APP_VERSION = "v1.6.6"
+APP_EXE_NAME = "文案中枢.exe"
 GITHUB_OWNER = "canglang-88"
 GITHUB_REPO = "wenan-app"
 UPDATE_API_URL = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
@@ -1187,26 +1188,38 @@ class CopyApp(tk.Tk):
         extract_dir = download_dir / "package"
         with zipfile.ZipFile(zip_path, "r") as archive:
             archive.extractall(extract_dir)
-        if (extract_dir / "app.py").exists():
+        if (extract_dir / APP_EXE_NAME).exists() or (extract_dir / "app.py").exists():
             return extract_dir
-        matches = [path.parent for path in extract_dir.rglob("app.py")]
+        matches = [path.parent for path in extract_dir.rglob(APP_EXE_NAME)]
         if not matches:
-            raise ValueError("更新包中没有找到 app.py")
+            matches = [path.parent for path in extract_dir.rglob("app.py")]
+        if not matches:
+            raise ValueError("更新包中没有找到主程序")
         return matches[0]
 
     def apply_update_and_restart(self, update_source: Path):
         updater = Path(tempfile.gettempdir()) / "wenan_app_apply_update.bat"
-        pythonw = Path(sys.executable)
-        if pythonw.name.lower() == "python.exe":
-            candidate = pythonw.with_name("pythonw.exe")
-            if candidate.exists():
-                pythonw = candidate
+        restart_exe = APP_DIR / APP_EXE_NAME
+        launcher = APP_DIR / "启动文案小程序.bat"
+        if getattr(sys, "frozen", False):
+            restart_command = f'start "" "{Path(sys.executable)}"'
+        elif restart_exe.exists():
+            restart_command = f'start "" "{restart_exe}"'
+        elif launcher.exists():
+            restart_command = f'start "" "{launcher}"'
+        else:
+            pythonw = Path(sys.executable)
+            if pythonw.name.lower() == "python.exe":
+                candidate = pythonw.with_name("pythonw.exe")
+                if candidate.exists():
+                    pythonw = candidate
+            restart_command = f'start "" "{pythonw}" "{APP_DIR / "app.py"}"'
         script = f"""@echo off
 chcp 65001 >nul
 timeout /t 2 /nobreak >nul
 robocopy "{update_source}" "{APP_DIR}" /E /XD data __pycache__ .git backup_* /XF wenan_app_update.zip "秘钥生成器.py" "激活码生成器.py" "启动激活码生成器.bat" "启动激活码生成器.ps1" "秘钥生成器图标.ico" "秘钥生成器图标.png" >nul
 if exist "{update_source / 'data'}" robocopy "{update_source / 'data'}" "{COPY_DIR}" /MIR >nul
-start "" "{pythonw}" "{APP_DIR / 'app.py'}"
+{restart_command}
 del "%~f0"
 """
         updater.write_text(script, encoding="utf-8")
@@ -1511,17 +1524,19 @@ del "%~f0"
             if not desktop.exists():
                 desktop = Path(r"D:\桌面")
             shortcut = desktop / "文案小程序.lnk"
-            pythonw = Path(sys.executable)
-            if pythonw.name.lower() == "python.exe":
-                candidate = pythonw.with_name("pythonw.exe")
-                if candidate.exists():
-                    pythonw = candidate
+            exe = APP_DIR / APP_EXE_NAME
+            if exe.exists():
+                launcher = exe
+            else:
+                launcher = APP_DIR / "启动文案小程序.bat"
+                if not launcher.exists():
+                    launcher = APP_DIR / "start_app.bat"
             icon = APP_DIR / "app.ico"
             powershell = (
                 "$shell = New-Object -ComObject WScript.Shell; "
                 f"$link = $shell.CreateShortcut('{shortcut}'); "
-                f"$link.TargetPath = '{pythonw}'; "
-                f"$link.Arguments = '\"{APP_DIR / 'app.py'}\"'; "
+                f"$link.TargetPath = '{launcher}'; "
+                "$link.Arguments = ''; "
                 f"$link.WorkingDirectory = '{APP_DIR}'; "
                 f"$link.IconLocation = '{icon}'; "
                 "$link.Description = '文案中枢'; "

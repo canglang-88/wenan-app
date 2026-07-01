@@ -15,3 +15,6 @@ backup_before_delete_import_*/
 venv/
 dist/
 build/
+_internal/
+*.spec
+*.exe
