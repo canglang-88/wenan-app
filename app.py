@@ -25,7 +25,7 @@ COPY_DIR = APP_DIR / "data"
 LEGACY_COPY_DIR = Path(r"D:\桌面\文案")
 INSPIRATION_CATEGORY = "励志文案"
 SINGLE_INSTANCE_PORT = 39271
-APP_VERSION = "v1.6.3"
+APP_VERSION = "v1.6.4"
 GITHUB_OWNER = "canglang-88"
 GITHUB_REPO = "wenan-app"
 UPDATE_API_URL = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
@@ -1204,7 +1204,8 @@ class CopyApp(tk.Tk):
         script = f"""@echo off
 chcp 65001 >nul
 timeout /t 2 /nobreak >nul
-robocopy "{update_source}" "{APP_DIR}" /MIR /XD __pycache__ .git backup_before_delete_import_20260701_022906 /XF wenan_app_update.zip >nul
+robocopy "{update_source}" "{APP_DIR}" /E /XD data __pycache__ .git backup_* /XF wenan_app_update.zip "秘钥生成器.py" "激活码生成器.py" "启动激活码生成器.bat" "启动激活码生成器.ps1" "秘钥生成器图标.ico" "秘钥生成器图标.png" >nul
+if exist "{update_source / 'data'}" robocopy "{update_source / 'data'}" "{COPY_DIR}" /MIR >nul
 start "" "{pythonw}" "{APP_DIR / 'app.py'}"
 del "%~f0"
 """
