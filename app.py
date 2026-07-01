@@ -25,7 +25,7 @@ COPY_DIR = APP_DIR / "data"
 LEGACY_COPY_DIR = Path(r"D:\桌面\文案")
 INSPIRATION_CATEGORY = "励志文案"
 SINGLE_INSTANCE_PORT = 39271
-APP_VERSION = "v1.6.2"
+APP_VERSION = "v1.6.3"
 GITHUB_OWNER = "canglang-88"
 GITHUB_REPO = "wenan-app"
 UPDATE_API_URL = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
@@ -1064,7 +1064,8 @@ class CopyApp(tk.Tk):
         self.make_action_button(actions, "修改标签", self.open_change_tag_window, COLORS["yellow"], width=120).pack(side=tk.LEFT, padx=10)
         self.make_action_button(actions, "删除选中", self.delete_selected, COLORS["red"], fg="#ffffff", width=130).pack(side=tk.LEFT)
         self.make_action_button(actions, "导出 TXT", self.export_txt, COLORS["green"], width=120).pack(side=tk.LEFT, padx=10)
-        self.make_action_button(actions, "重新读取", self.refresh_data, COLORS["panel2"], fg=COLORS["ink"], width=120).pack(side=tk.LEFT)
+        self.make_action_button(actions, "建快捷方式", self.create_desktop_shortcut, COLORS["cyan"], width=130).pack(side=tk.LEFT)
+        self.make_action_button(actions, "重新读取", self.refresh_data, COLORS["panel2"], fg=COLORS["ink"], width=120).pack(side=tk.LEFT, padx=10)
 
     def draw_background(self, _event=None):
         self.bg_canvas.delete("all")
@@ -1219,6 +1220,7 @@ del "%~f0"
         self.render_items()
 
     def render_categories(self):
+        scroll_position = self.category_list.yview()[0] if self.category_list.size() else 0
         self.category_list.delete(0, tk.END)
         if self.selected_subcategory and self.selected_category in self.categories:
             self.expanded_categories.add(self.selected_category)
@@ -1254,10 +1256,11 @@ del "%~f0"
         self.category_list.selection_clear(0, tk.END)
         self.category_list.selection_set(index)
         self.category_list.activate(index)
-        self.category_list.see(index)
+        self.category_list.yview_moveto(scroll_position)
         self.stats_label.config(text=f"{len(self.categories)} 个大分类 / {len(self.items)} 条文案")
 
     def on_category_select(self, _event):
+        scroll_position = self.category_list.yview()[0]
         selection = self.category_list.curselection()
         if not selection:
             return
@@ -1283,6 +1286,7 @@ del "%~f0"
             self.expanded_categories.add(category)
 
         self.render_categories()
+        self.category_list.yview_moveto(scroll_position)
         self.render_items()
 
     def close_subcategory_popup(self):
@@ -1499,6 +1503,38 @@ del "%~f0"
             messagebox.showerror("导出失败", str(exc))
             return
         messagebox.showinfo("导出完成", f"已导出 {len(items)} 条文案到：\n{target}")
+
+    def create_desktop_shortcut(self):
+        try:
+            desktop = Path.home() / "Desktop"
+            if not desktop.exists():
+                desktop = Path(r"D:\桌面")
+            shortcut = desktop / "文案小程序.lnk"
+            pythonw = Path(sys.executable)
+            if pythonw.name.lower() == "python.exe":
+                candidate = pythonw.with_name("pythonw.exe")
+                if candidate.exists():
+                    pythonw = candidate
+            icon = APP_DIR / "app.ico"
+            powershell = (
+                "$shell = New-Object -ComObject WScript.Shell; "
+                f"$link = $shell.CreateShortcut('{shortcut}'); "
+                f"$link.TargetPath = '{pythonw}'; "
+                f"$link.Arguments = '\"{APP_DIR / 'app.py'}\"'; "
+                f"$link.WorkingDirectory = '{APP_DIR}'; "
+                f"$link.IconLocation = '{icon}'; "
+                "$link.Description = '文案中枢'; "
+                "$link.Save();"
+            )
+            subprocess.run(
+                ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", powershell],
+                check=True,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+        except Exception as exc:
+            messagebox.showerror("创建失败", f"桌面快捷方式创建失败：\n{exc}")
+            return
+        messagebox.showinfo("创建成功", f"已创建桌面快捷方式：\n{shortcut}")
 
     def preview_selected(self):
         items = self.selected_items()
