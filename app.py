@@ -25,12 +25,13 @@ COPY_DIR = APP_DIR / "data"
 LEGACY_COPY_DIR = Path(r"D:\桌面\文案")
 INSPIRATION_CATEGORY = "励志文案"
 SINGLE_INSTANCE_PORT = 39271
-APP_VERSION = "v1.6.6"
+APP_VERSION = "v1.6.7"
 APP_EXE_NAME = "文案中枢.exe"
 GITHUB_OWNER = "canglang-88"
 GITHUB_REPO = "wenan-app"
 UPDATE_API_URL = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
 UPDATE_ASSET_NAME = "wenan_app_update.zip"
+LICENSE_CONTROL_API_URL = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/contents/license_control.json?ref=main"
 LICENSE_SECRET = "wenan-canglang-license-2026-v1"
 LICENSE_DIR = Path.home() / "AppData" / "Roaming" / "WenanApp"
 LICENSE_FILE = LICENSE_DIR / "license.json"
@@ -204,12 +205,72 @@ def save_license(device_code: str, code: str, expires: str) -> None:
     write_text(LICENSE_FILE, json.dumps(payload, ensure_ascii=False, indent=2))
 
 
-def is_activated() -> bool:
+def fetch_license_control() -> dict:
+    request = urllib.request.Request(
+        LICENSE_CONTROL_API_URL,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "wenan-app-license",
+            "Cache-Control": "no-cache",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=10) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    encoded = payload.get("content", "")
+    if not encoded:
+        return {}
+    decoded = base64.b64decode(encoded).decode("utf-8")
+    return json.loads(decoded)
+
+
+def check_cloud_license(device_code: str) -> tuple[bool, str]:
+    try:
+        control = fetch_license_control()
+    except Exception:
+        return False, "无法连接云端授权中心，请检查网络后重新打开"
+
+    if not control.get("enabled", True):
+        return True, ""
+
+    device_code = device_code.strip().upper()
+    blocked = {str(item).strip().upper() for item in control.get("blocked_devices", [])}
+    allowed = {str(item).strip().upper() for item in control.get("allowed_devices", [])}
+    rules = control.get("device_rules", {})
+    rule = rules.get(device_code) or rules.get(device_code.lower()) or {}
+
+    if device_code in blocked or rule.get("blocked") is True:
+        reason = rule.get("reason") or control.get("blocked_message") or "本机授权已被管理员停用"
+        return False, str(reason)
+
+    if allowed and device_code not in allowed:
+        return False, "本机不在云端授权名单中，请联系管理员"
+
+    cloud_expires = str(rule.get("expires", "")).strip()
+    if cloud_expires and cloud_expires.upper() != "PERMANENT":
+        try:
+            from datetime import date
+
+            if date.today() > date.fromisoformat(cloud_expires):
+                return False, "本机云端授权已到期"
+        except ValueError:
+            return False, "云端授权有效期格式不正确"
+
+    return True, ""
+
+
+def check_activation_status() -> tuple[bool, str]:
     license_data = load_license()
     device_code = get_device_code()
     if license_data.get("device_code") != device_code:
-        return False
-    ok, _message = verify_license_code(device_code, license_data.get("license_code", ""))
+        return False, "本机尚未激活"
+    ok, message = verify_license_code(device_code, license_data.get("license_code", ""))
+    if not ok:
+        return False, message
+    return check_cloud_license(device_code)
+
+
+def is_activated() -> bool:
+    ok, _message = check_activation_status()
     return ok
 
 
@@ -253,6 +314,10 @@ def show_activation_window() -> bool:
         ok, message = verify_license_code(device_code, code_var.get())
         if not ok:
             status_var.set(message)
+            return
+        cloud_ok, cloud_message = check_cloud_license(device_code)
+        if not cloud_ok:
+            status_var.set(cloud_message)
             return
         save_license(device_code, code_var.get(), message)
         result["ok"] = True
@@ -2081,8 +2146,16 @@ if __name__ == "__main__":
     if instance_lock is None:
         bring_existing_window_to_front()
         sys.exit(0)
-    if not is_activated() and not show_activation_window():
-        sys.exit(0)
+    activated, activation_message = check_activation_status()
+    if not activated:
+        if load_license():
+            root = tk.Tk()
+            root.withdraw()
+            messagebox.showerror("授权不可用", activation_message)
+            root.destroy()
+            sys.exit(0)
+        if not show_activation_window():
+            sys.exit(0)
     bootstrap_internal_data()
     app = CopyApp()
     app.mainloop()

@@ -1,0 +1,7 @@
+{
+  "enabled": true,
+  "blocked_message": "本机授权已被管理员停用",
+  "allowed_devices": [],
+  "blocked_devices": [],
+  "device_rules": {}
+}

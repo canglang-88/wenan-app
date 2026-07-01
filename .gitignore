@@ -18,3 +18,8 @@ build/
 _internal/
 *.spec
 *.exe
+秘钥生成器.py
+秘钥生成器图标.png
+秘钥生成器图标.ico
+启动激活码生成器.bat
+启动激活码生成器.ps1
