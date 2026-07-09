@@ -25,8 +25,11 @@ COPY_DIR = APP_DIR / "data"
 LEGACY_COPY_DIR = Path(r"D:\桌面\文案")
 INSPIRATION_CATEGORY = "励志文案"
 SINGLE_INSTANCE_PORT = 39271
-APP_VERSION = "v1.6.7"
+APP_VERSION = "v1.6.8"
 APP_EXE_NAME = "文案中枢.exe"
+WHOLE_IMPORT_CATEGORIES = {"123"}
+WHOLE_ITEM_START = "<<<WENAN-WHOLE-ITEM"
+WHOLE_ITEM_END = "<<<WENAN-WHOLE-END>>>"
 GITHUB_OWNER = "canglang-88"
 GITHUB_REPO = "wenan-app"
 UPDATE_API_URL = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
@@ -35,6 +38,7 @@ LICENSE_CONTROL_API_URL = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_
 LICENSE_SECRET = "wenan-canglang-license-2026-v1"
 LICENSE_DIR = Path.home() / "AppData" / "Roaming" / "WenanApp"
 LICENSE_FILE = LICENSE_DIR / "license.json"
+READING_MEMORY_FILE = LICENSE_DIR / "reading_memory.json"
 
 
 COLORS = {
@@ -68,6 +72,20 @@ def read_text(path: Path) -> str:
 def write_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8-sig")
+
+
+def load_reading_memory() -> dict:
+    if not READING_MEMORY_FILE.exists():
+        return {}
+    try:
+        return json.loads(read_text(READING_MEMORY_FILE))
+    except Exception:
+        return {}
+
+
+def save_reading_memory(memory: dict) -> None:
+    LICENSE_DIR.mkdir(parents=True, exist_ok=True)
+    write_text(READING_MEMORY_FILE, json.dumps(memory, ensure_ascii=False, indent=2))
 
 
 def bootstrap_internal_data() -> None:
@@ -262,7 +280,7 @@ def check_activation_status() -> tuple[bool, str]:
     license_data = load_license()
     device_code = get_device_code()
     if license_data.get("device_code") != device_code:
-        return False, "本机尚未激活"
+        return False, "本机设备码已变化，请重新授权"
     ok, message = verify_license_code(device_code, license_data.get("license_code", ""))
     if not ok:
         return False, message
@@ -346,6 +364,8 @@ def parse_file(path: Path) -> list[dict]:
 
     category = parts[0]
     subcategory = path.stem if path.stem != category else ""
+    if category in WHOLE_IMPORT_CATEGORIES:
+        return parse_whole_file(path, category, subcategory)
     items = []
     current_number = None
     current_lines = []
@@ -377,6 +397,56 @@ def parse_file(path: Path) -> list[dict]:
         current_lines = [match.group(2)]
     flush_current()
     return items
+
+
+def parse_whole_file(path: Path, category: str, subcategory: str) -> list[dict]:
+    content = read_text(path).replace("\r\n", "\n").replace("\r", "\n")
+    pattern = re.compile(
+        rf"(?ms)^{re.escape(WHOLE_ITEM_START)}:(\d+)>>>\n(.*?)(?=^{re.escape(WHOLE_ITEM_START)}:\d+>>>|\Z)"
+    )
+    items = []
+    for match in pattern.finditer(content):
+        number = int(match.group(1))
+        text = match.group(2)
+        text = re.sub(rf"\n?{re.escape(WHOLE_ITEM_END)}\s*\Z", "", text).rstrip("\n")
+        if text:
+            compact = re.sub(r"\s+", " ", text.strip())
+            items.append(
+                {
+                    "category": category,
+                    "subcategory": subcategory,
+                    "number": number,
+                    "text": text,
+                    "display_text": f"长文阅读 · {len(text.strip())}字 · {compact[:80]}{'...' if len(compact) > 80 else ''}",
+                    "search_text": f"{category} {subcategory} 长文 阅读 {compact[:120]}",
+                    "path": path,
+                }
+            )
+    if items:
+        return items
+
+    lines = content.splitlines()
+    if lines and lines[0].strip() == path.stem:
+        lines = lines[1:]
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    if lines:
+        lines[0] = re.sub(r"^\s*1[\.、]\s*", "", lines[0], count=1)
+    text = "\n".join(lines).rstrip("\n")
+    if not text:
+        return []
+    compact = re.sub(r"\s+", " ", text.strip())
+    return [
+        {
+            "category": category,
+            "subcategory": subcategory,
+            "number": 1,
+            "text": text,
+            "display_text": f"长文阅读 · {len(text.strip())}字 · {compact[:80]}{'...' if len(compact) > 80 else ''}",
+            "search_text": f"{category} {subcategory} 长文 阅读 {compact[:120]}",
+            "path": path,
+        }
+    ]
 
 
 def get_files() -> list[Path]:
@@ -415,6 +485,25 @@ def ensure_category(category: str) -> Path:
     if not main_file.exists():
         write_text(main_file, f"{category}\n")
     return folder
+
+
+def clear_category_items(category: str) -> int:
+    category = category.strip()
+    if not category or category == "全部":
+        raise ValueError("请先选择一个要清空的大项")
+    folder = COPY_DIR / category
+    if not folder.exists():
+        raise ValueError("这个大项不存在，请先重新读取数据")
+
+    count = 0
+    for path in folder.glob("*.txt"):
+        count += len(parse_file(path))
+        write_text(path, f"{path.stem}\n")
+
+    main_file = folder / f"{category}.txt"
+    if not main_file.exists():
+        write_text(main_file, f"{category}\n")
+    return count
 
 
 def rename_category(old_name: str, new_name: str) -> None:
@@ -465,6 +554,16 @@ def target_file(category: str, subcategory: str) -> Path:
     return COPY_DIR / category / f"{category}.txt"
 
 
+def item_table_preview(item: dict) -> str:
+    if item.get("display_text"):
+        return item["display_text"]
+    text = item["text"].strip()
+    compact = re.sub(r"\s+", " ", text)
+    if item["category"] in WHOLE_IMPORT_CATEGORIES:
+        return f"长文阅读 · {len(text)}字 · {compact[:80]}{'...' if len(compact) > 80 else ''}"
+    return compact[:180] + ("..." if len(compact) > 180 else "")
+
+
 def append_copy(category: str, subcategory: str, text: str) -> None:
     text = text.strip().replace("\r\n", "\n").replace("\r", "\n")
     if not category:
@@ -481,10 +580,16 @@ def append_copy(category: str, subcategory: str, text: str) -> None:
     write_text(path, f"{content}\n{next_number}. {text}\n")
 
 
-def parse_import_lines(source: Path) -> list[str]:
+def parse_import_lines(source: Path, whole_document: bool = False) -> list[str]:
     if not source.exists():
         raise ValueError("请选择 TXT 文件")
     content = read_text(source).replace("\r\n", "\n").replace("\r", "\n")
+    if whole_document:
+        item = content.strip()
+        if not item:
+            raise ValueError("TXT 里没有可导入的文案")
+        return [item]
+
     numbered_items = parse_chinese_numbered_items(content)
     if numbered_items:
         return numbered_items
@@ -615,6 +720,9 @@ def append_lines(category: str, subcategory: str, lines: list[str]) -> int:
 
     ensure_category(category)
     path = target_file(category, subcategory)
+    if category in WHOLE_IMPORT_CATEGORIES:
+        return append_whole_lines(path, lines)
+
     title = path.stem
     old = read_text(path).rstrip() if path.exists() else f"{title}\n"
     numbers = [int(match.group(1)) for match in re.finditer(r"^\s*(\d+)[\.、]", old, re.M)]
@@ -626,6 +734,20 @@ def append_lines(category: str, subcategory: str, lines: list[str]) -> int:
         additions.append(f"{index}. {first}")
         additions.extend(rest)
     write_text(path, old + "\n" + "\n".join(additions) + "\n")
+    return len(lines)
+
+
+def append_whole_lines(path: Path, lines: list[str]) -> int:
+    old = read_text(path).rstrip("\n") if path.exists() else path.stem
+    entries = parse_whole_file(path, path.parent.name, "" if path.stem == path.parent.name else path.stem)
+    next_number = max([entry["number"] for entry in entries], default=0) + 1
+    additions = []
+    for index, text in enumerate(lines, start=next_number):
+        normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+        additions.append(f"{WHOLE_ITEM_START}:{index}>>>")
+        additions.append(normalized.rstrip("\n"))
+        additions.append(WHOLE_ITEM_END)
+    write_text(path, old + "\n\n" + "\n".join(additions).rstrip("\n") + "\n")
     return len(lines)
 
 
@@ -658,6 +780,9 @@ def update_copy_item(item: dict, new_text: str) -> None:
         raise ValueError("文案内容不能为空")
 
     path = Path(item["path"])
+    if item["category"] in WHOLE_IMPORT_CATEGORIES:
+        return update_whole_item(item, new_text)
+
     entries = parse_file(path)
     updated = False
     output = [path.stem, ""]
@@ -674,9 +799,29 @@ def update_copy_item(item: dict, new_text: str) -> None:
     write_text(path, "\n".join(output).rstrip() + "\n")
 
 
+def update_whole_item(item: dict, new_text: str) -> None:
+    path = Path(item["path"])
+    entries = parse_file(path)
+    updated = False
+    output = [path.stem, ""]
+    for entry in entries:
+        text = new_text if entry["number"] == item["number"] and entry["text"] == item["text"] else entry["text"]
+        if entry["number"] == item["number"] and entry["text"] == item["text"]:
+            updated = True
+        output.append(f"{WHOLE_ITEM_START}:{entry['number']}>>>")
+        output.append(text.rstrip("\n"))
+        output.append(WHOLE_ITEM_END)
+        output.append("")
+    if not updated:
+        raise ValueError("没有找到要修改的文案")
+    write_text(path, "\n".join(output).rstrip() + "\n")
+
+
 def delete_copy_items_from_file(path: Path, items: list[dict]) -> int:
     if not path.exists():
         raise ValueError("对应的文案文件不存在")
+    if path.parent.name in WHOLE_IMPORT_CATEGORIES:
+        return delete_whole_items_from_file(path, items)
 
     targets = {(item["number"], item["text"]) for item in items}
     title_lines = []
@@ -710,8 +855,30 @@ def delete_copy_items_from_file(path: Path, items: list[dict]) -> int:
     return removed
 
 
+def delete_whole_items_from_file(path: Path, items: list[dict]) -> int:
+    targets = {(item["number"], item["text"]) for item in items}
+    entries = parse_file(path)
+    kept = []
+    removed = 0
+    for entry in entries:
+        if (entry["number"], entry["text"]) in targets:
+            removed += 1
+        else:
+            kept.append(entry)
+    if removed == 0:
+        raise ValueError("没有找到要删除的文案")
+    output = [path.stem, ""]
+    for index, entry in enumerate(kept, start=1):
+        output.append(f"{WHOLE_ITEM_START}:{index}>>>")
+        output.append(entry["text"].rstrip("\n"))
+        output.append(WHOLE_ITEM_END)
+        output.append("")
+    write_text(path, "\n".join(output).rstrip() + "\n")
+    return removed
+
+
 def import_txt(category: str, subcategory: str, source: Path) -> int:
-    return append_lines(category, subcategory, parse_import_lines(source))
+    return append_lines(category, subcategory, parse_import_lines(source, category in WHOLE_IMPORT_CATEGORIES))
 
 
 def inspiration_keywords() -> dict[str, list[str]]:
@@ -855,10 +1022,11 @@ def classify_tag_in_category(text: str, category: str, selected_subcategory: str
 def build_import_plan(source: Path, category: str, selected_subcategory: str, categories: dict[str, list[str]], auto_tag: bool) -> dict[tuple[str, str], list[str]]:
     if not category:
         raise ValueError("请选择导入的大类")
-    lines = parse_import_lines(source)
+    whole_document = category in WHOLE_IMPORT_CATEGORIES
+    lines = parse_import_lines(source, whole_document)
     plan: dict[tuple[str, str], list[str]] = {}
     for line in lines:
-        tag = classify_tag_in_category(line, category, selected_subcategory, categories, auto_tag)
+        tag = selected_subcategory if whole_document else classify_tag_in_category(line, category, selected_subcategory, categories, auto_tag)
         plan.setdefault((category, tag), []).append(line)
     return plan
 
@@ -950,6 +1118,9 @@ class CopyApp(tk.Tk):
         self.preview_text = None
         self.preview_meta = None
         self.preview_title = None
+        self.reading_memory = load_reading_memory()
+        self.current_preview_key = ""
+        self.search_after_id = None
 
         self.style = ttk.Style(self)
         self.style.theme_use("clam")
@@ -1070,7 +1241,7 @@ class CopyApp(tk.Tk):
             font=("Microsoft YaHei", 13),
         )
         search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=12, padx=(0, 14))
-        search_entry.bind("<KeyRelease>", lambda _event: self.render_items())
+        search_entry.bind("<KeyRelease>", lambda _event: self.schedule_render_items())
 
         workbench = tk.Frame(main, bg=COLORS["bg"])
         workbench.pack(fill=tk.BOTH, expand=True)
@@ -1129,6 +1300,7 @@ class CopyApp(tk.Tk):
         self.make_action_button(actions, "弹窗预览", self.preview_selected, COLORS["cyan"], width=130).pack(side=tk.LEFT)
         self.make_action_button(actions, "修改标签", self.open_change_tag_window, COLORS["yellow"], width=120).pack(side=tk.LEFT, padx=10)
         self.make_action_button(actions, "删除选中", self.delete_selected, COLORS["red"], fg="#ffffff", width=130).pack(side=tk.LEFT)
+        self.make_action_button(actions, "清空大项", self.clear_current_category, COLORS["red"], fg="#ffffff", width=120).pack(side=tk.LEFT, padx=(10, 0))
         self.make_action_button(actions, "导出 TXT", self.export_txt, COLORS["green"], width=120).pack(side=tk.LEFT, padx=10)
         self.make_action_button(actions, "建快捷方式", self.create_desktop_shortcut, COLORS["cyan"], width=130).pack(side=tk.LEFT)
         self.make_action_button(actions, "重新读取", self.refresh_data, COLORS["panel2"], fg=COLORS["ink"], width=120).pack(side=tk.LEFT, padx=10)
@@ -1283,7 +1455,7 @@ class CopyApp(tk.Tk):
 chcp 65001 >nul
 timeout /t 2 /nobreak >nul
 robocopy "{update_source}" "{APP_DIR}" /E /XD data __pycache__ .git backup_* /XF wenan_app_update.zip "秘钥生成器.py" "激活码生成器.py" "启动激活码生成器.bat" "启动激活码生成器.ps1" "秘钥生成器图标.ico" "秘钥生成器图标.png" >nul
-if exist "{update_source / 'data'}" robocopy "{update_source / 'data'}" "{COPY_DIR}" /MIR >nul
+if exist "{update_source / 'data'}" robocopy "{update_source / 'data'}" "{COPY_DIR}" /MIR /XD "123" >nul
 {restart_command}
 del "%~f0"
 """
@@ -1476,15 +1648,19 @@ del "%~f0"
         keyword = self.keyword_var.get().strip().lower()
         result = []
         for item in self.items:
+            if self.selected_category == "全部" and item["category"] in WHOLE_IMPORT_CATEGORIES:
+                continue
             category_ok = self.selected_category == "全部" or item["category"] == self.selected_category
             sub_ok = not self.selected_subcategory or item["subcategory"] == self.selected_subcategory
-            haystack = f"{item['category']} {item['subcategory']} {item['text']}".lower()
+            searchable_text = item.get("search_text") or item["text"]
+            haystack = f"{item['category']} {item['subcategory']} {searchable_text}".lower()
             keyword_ok = not keyword or keyword in haystack
             if category_ok and sub_ok and keyword_ok:
                 result.append(item)
         return result
 
     def render_items(self):
+        self.search_after_id = None
         for row in self.tree.get_children():
             self.tree.delete(row)
 
@@ -1492,16 +1668,22 @@ del "%~f0"
         for index, item in enumerate(items):
             tag = item["subcategory"] or "-"
             row_tag = "even" if index % 2 == 0 else "odd"
-            self.tree.insert("", tk.END, iid=str(index), values=(item["category"], tag, item["text"]), tags=(row_tag,))
+            self.tree.insert("", tk.END, iid=str(index), values=(item["category"], tag, item_table_preview(item)), tags=(row_tag,))
 
         label = self.selected_subcategory or self.selected_category
         self.heading.config(text=f"{label}文案" if label != "全部" and not label.endswith("文案") else ("全部文案" if label == "全部" else label))
         self.summary.config(text=f"当前筛选 {len(items)} 条 · 可按 Ctrl/Shift 多选 · 双击文案可预览 · 数据保存在程序内部")
         self.update_preview_panel()
 
+    def schedule_render_items(self):
+        if self.search_after_id:
+            self.after_cancel(self.search_after_id)
+        self.search_after_id = self.after(180, self.render_items)
+
     def update_preview_panel(self):
         if not self.preview_text or not self.preview_meta or not self.preview_title:
             return
+        self.save_current_preview_position()
         items = self.selected_items()
         self.preview_text.configure(state=tk.NORMAL)
         self.preview_text.delete("1.0", tk.END)
@@ -1510,6 +1692,7 @@ del "%~f0"
             self.preview_meta.config(text="点击一条文案查看完整内容")
             self.preview_text.insert(tk.END, "这里会显示选中文案的完整内容。")
             self.preview_text.configure(state=tk.DISABLED)
+            self.current_preview_key = ""
             return
 
         first = items[0]
@@ -1518,12 +1701,29 @@ del "%~f0"
         if len(items) == 1:
             self.preview_meta.config(text=f"第 {first['number']} 条 · 可复制、编辑或删除")
             content = first["text"]
+            self.current_preview_key = self.reading_key(first)
         else:
             meta = "、".join(sorted({item["subcategory"] or item["category"] for item in items}))
             self.preview_meta.config(text=f"已选择 {len(items)} 条 · {meta}")
             content = "\n\n".join(item["text"] for item in items)
+            self.current_preview_key = ""
         self.preview_text.insert(tk.END, content)
         self.preview_text.configure(state=tk.DISABLED)
+        if self.current_preview_key:
+            position = float(self.reading_memory.get(self.current_preview_key, 0) or 0)
+            self.preview_text.after(80, lambda pos=position: self.preview_text.yview_moveto(pos))
+
+    def reading_key(self, item: dict) -> str:
+        return f"{Path(item['path']).as_posix()}#{item['number']}"
+
+    def save_current_preview_position(self):
+        if not self.preview_text or not self.current_preview_key:
+            return
+        try:
+            self.reading_memory[self.current_preview_key] = self.preview_text.yview()[0]
+            save_reading_memory(self.reading_memory)
+        except Exception:
+            pass
 
     def selected_item(self):
         items = self.selected_items()
@@ -1662,6 +1862,25 @@ del "%~f0"
         content = "\n\n".join(item["text"] for item in items)
         text_box.insert(tk.END, content)
         text_box.configure(state=tk.DISABLED)
+        reading_key = self.reading_key(items[0]) if len(items) == 1 else ""
+        if reading_key:
+            position = float(self.reading_memory.get(reading_key, 0) or 0)
+            text_box.after(80, lambda pos=position: text_box.yview_moveto(pos))
+
+        def save_dialog_position():
+            if not reading_key:
+                return
+            try:
+                self.reading_memory[reading_key] = text_box.yview()[0]
+                save_reading_memory(self.reading_memory)
+            except Exception:
+                pass
+
+        def close_preview():
+            save_dialog_position()
+            win.destroy()
+
+        win.protocol("WM_DELETE_WINDOW", close_preview)
 
         def copy_preview():
             self.clipboard_clear()
@@ -1680,6 +1899,7 @@ del "%~f0"
 
         def save_edit():
             try:
+                save_dialog_position()
                 update_copy_item(items[0], text_box.get("1.0", tk.END))
             except ValueError as exc:
                 messagebox.showwarning("提示", str(exc))
@@ -1692,7 +1912,7 @@ del "%~f0"
             messagebox.showinfo("已保存", "文案内容已更新")
 
         self.make_action_button(buttons, "复制", copy_preview, COLORS["green"], width=105).pack(side=tk.RIGHT)
-        self.make_action_button(buttons, "关闭", win.destroy, COLORS["panel2"], fg=COLORS["ink"], width=105).pack(side=tk.RIGHT, padx=10)
+        self.make_action_button(buttons, "关闭", close_preview, COLORS["panel2"], fg=COLORS["ink"], width=105).pack(side=tk.RIGHT, padx=10)
         edit_button = self.make_action_button(buttons, "编辑", enable_edit, COLORS["cyan"], width=105)
         save_button = self.make_action_button(buttons, "保存修改", save_edit, COLORS["yellow"], width=125)
         edit_button.pack(side=tk.LEFT)
@@ -1717,6 +1937,28 @@ del "%~f0"
             return
         self.refresh_data()
         messagebox.showinfo("已删除", f"已删除 {removed} 条文案")
+
+    def clear_current_category(self):
+        category = self.selected_category
+        if not category or category == "全部":
+            messagebox.showinfo("提示", "请先在左侧选择要清空的大项")
+            return
+        count = sum(1 for item in self.items if item["category"] == category)
+        ok = messagebox.askyesno(
+            "确认清空",
+            f"确定清空「{category}」里的全部文案吗？\n\n将删除 {count} 条文案，但保留这个大项和子项目。",
+        )
+        if not ok:
+            return
+        try:
+            cleared = clear_category_items(category)
+        except Exception as exc:
+            messagebox.showerror("清空失败", str(exc))
+            return
+        self.selected_category = category
+        self.selected_subcategory = ""
+        self.refresh_data()
+        messagebox.showinfo("清空完成", f"已清空「{category}」里的 {cleared} 条文案")
 
     def open_change_tag_window(self):
         items = self.selected_items()
@@ -2148,12 +2390,18 @@ if __name__ == "__main__":
         sys.exit(0)
     activated, activation_message = check_activation_status()
     if not activated:
-        if load_license():
+        cloud_blocked = any(word in activation_message for word in ("停用", "云端", "名单"))
+        if load_license() and cloud_blocked:
             root = tk.Tk()
             root.withdraw()
             messagebox.showerror("授权不可用", activation_message)
             root.destroy()
             sys.exit(0)
+        if load_license():
+            root = tk.Tk()
+            root.withdraw()
+            messagebox.showwarning("需要重新授权", activation_message)
+            root.destroy()
         if not show_activation_window():
             sys.exit(0)
     bootstrap_internal_data()

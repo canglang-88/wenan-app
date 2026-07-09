@@ -18,6 +18,7 @@ build/
 _internal/
 *.spec
 *.exe
+data/123/
 秘钥生成器.py
 秘钥生成器图标.png
 秘钥生成器图标.ico
